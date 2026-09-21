@@ -286,7 +286,7 @@ var resultTpl = template.Must(template.New("result").Funcs(template.FuncMap{
 			</div>
 		</details>
 
-		<details class="group bg-slate-950 rounded-lg border border-slate-800 shadow-inner" open>
+		<details class="group bg-slate-950 rounded-lg border border-slate-800 shadow-inner">
 			<summary class="p-4 text-sm font-semibold uppercase tracking-wider text-slate-400 cursor-pointer list-none flex justify-between items-center">
 				<div class="flex items-center gap-2"><div class="h-2 w-2 rounded-full bg-indigo-500"></div>The Rules (Questions)</div>
 				<span class="text-slate-600 group-open:rotate-180 transition-transform">▼</span>
