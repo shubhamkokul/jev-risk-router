@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  jev-router:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - fructus_fructus
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jev.rule=Host(`jev.solutionbyhour.com`)"
+      - "traefik.http.routers.jev.tls.certresolver=letsencrypt"
+      - "traefik.http.services.jev.loadbalancer.server.port=8080"
+      - "traefik.docker.network=fructus_fructus"
+
+networks:
+  fructus_fructus:
+    external: true
