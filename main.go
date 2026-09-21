@@ -82,18 +82,21 @@ type JevRequest struct {
 }
 
 type JevResponse struct {
-	Choices map[string]struct {
-		Choice     string  `json:"choice"`
-		Confidence float64 `json:"confidence"`
-	} `json:"choices"`
-	Nouls map[string]struct {
-		Noul       bool    `json:"noul"`
-		Confidence float64 `json:"confidence"`
-	} `json:"nouls"`
-	Scores map[string]struct {
-		Score      string  `json:"score"`
-		Confidence float64 `json:"confidence"`
-	} `json:"scores"`
+	Model   string            `json:"model"`
+	Answers map[string]Answer `json:"answers"`
+	Usage   struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+}
+
+type Answer struct {
+	Type          string             `json:"type"`
+	Noul          *float64           `json:"noul,omitempty"`
+	Choice        string             `json:"choice,omitempty"`
+	Score         *float64           `json:"score,omitempty"`
+	Confidence    float64            `json:"confidence,omitempty"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 }
 
 // --- HTML Templates ---
@@ -261,8 +264,10 @@ var indexHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
-// Standardized Result Template for all use cases
-var resultTpl = template.Must(template.New("result").Parse(`
+// Standardized Result Template
+var resultTpl = template.Must(template.New("result").Funcs(template.FuncMap{
+	"mul": func(a float64, b float64) float64 { return a * b },
+}).Parse(`
 {{if .Error}}
 <div class="p-4 bg-rose-500/10 border border-rose-500/50 rounded-lg text-rose-400 text-sm whitespace-pre-wrap mt-6">
 	{{.Error}}
@@ -271,21 +276,25 @@ var resultTpl = template.Must(template.New("result").Parse(`
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8 animate-fade-in border-t border-slate-800 pt-8">
 	<!-- Left: Inputs -->
 	<div class="space-y-4">
-		<div class="flex items-center gap-2 mb-2">
-			<div class="h-2 w-2 rounded-full bg-slate-500"></div>
-			<h3 class="text-sm font-semibold uppercase tracking-wider text-slate-400">The Input (State)</h3>
-		</div>
-		<div class="bg-slate-950 rounded-lg border border-slate-800 p-4 shadow-inner">
-			<pre class="text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap overflow-x-auto">{{.StateStr}}</pre>
-		</div>
+		<details class="group bg-slate-950 rounded-lg border border-slate-800 shadow-inner">
+			<summary class="p-4 text-sm font-semibold uppercase tracking-wider text-slate-400 cursor-pointer list-none flex justify-between items-center">
+				<div class="flex items-center gap-2"><div class="h-2 w-2 rounded-full bg-slate-500"></div>The Input (State)</div>
+				<span class="text-slate-600 group-open:rotate-180 transition-transform">▼</span>
+			</summary>
+			<div class="p-4 pt-0 border-t border-slate-800/50 mt-2">
+				<pre class="text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap overflow-x-auto">{{.StateStr}}</pre>
+			</div>
+		</details>
 
-		<div class="flex items-center gap-2 mt-6 mb-2">
-			<div class="h-2 w-2 rounded-full bg-indigo-500"></div>
-			<h3 class="text-sm font-semibold uppercase tracking-wider text-slate-400">The Rules (Questions)</h3>
-		</div>
-		<div class="bg-slate-950 rounded-lg border border-slate-800 p-4 shadow-inner">
-			<pre class="text-[11px] leading-relaxed text-indigo-300 whitespace-pre-wrap overflow-x-auto">{{.QuestionsStr}}</pre>
-		</div>
+		<details class="group bg-slate-950 rounded-lg border border-slate-800 shadow-inner" open>
+			<summary class="p-4 text-sm font-semibold uppercase tracking-wider text-slate-400 cursor-pointer list-none flex justify-between items-center">
+				<div class="flex items-center gap-2"><div class="h-2 w-2 rounded-full bg-indigo-500"></div>The Rules (Questions)</div>
+				<span class="text-slate-600 group-open:rotate-180 transition-transform">▼</span>
+			</summary>
+			<div class="p-4 pt-0 border-t border-slate-800/50 mt-2">
+				<pre class="text-[11px] leading-relaxed text-indigo-300 whitespace-pre-wrap overflow-x-auto">{{.QuestionsStr}}</pre>
+			</div>
+		</details>
 	</div>
 
 	<!-- Right: Results -->
@@ -294,19 +303,34 @@ var resultTpl = template.Must(template.New("result").Parse(`
 			<div class="h-2 w-2 rounded-full bg-emerald-500"></div>
 			<h3 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Jev Engine Decision</h3>
 		</div>
-		<div class="bg-slate-950 rounded-lg border border-slate-800 p-4 shadow-inner space-y-3">
+		<div class="bg-slate-950 rounded-lg border border-slate-800 p-4 shadow-inner space-y-4">
 			{{range $key, $val := .Decisions}}
-			<div class="flex justify-between items-center border-b border-slate-800/60 pb-3 last:border-0 last:pb-0">
-				<div>
-					<div class="text-xs text-slate-500 font-mono">{{$key}}</div>
-					<div class="text-sm font-medium text-slate-200 mt-1">{{$val.Value}}</div>
-				</div>
-				<div class="text-right">
-					<div class="text-[10px] text-slate-500 uppercase">Confidence</div>
-					<div class="text-xs font-mono {{if gt $val.Confidence 0.8}}text-emerald-400{{else}}text-amber-400{{end}}">
-						{{printf "%.2f" $val.Confidence}}
+			<div class="flex flex-col border-b border-slate-800/60 pb-4 last:border-0 last:pb-0">
+				<div class="flex justify-between items-end mb-2">
+					<div>
+						<div class="text-xs text-slate-500 font-mono">{{$key}}</div>
+						<div class="text-sm font-medium text-slate-200 mt-1">{{$val.Value}}</div>
+					</div>
+					<div class="text-right">
+						<div class="text-[10px] text-slate-500 uppercase">Confidence</div>
+						<div class="text-xs font-mono {{if gt $val.Confidence 0.8}}text-emerald-400{{else if gt $val.Confidence 0.5}}text-amber-400{{else}}text-rose-400{{end}}">
+							{{printf "%.0f%%" (mul $val.Confidence 100.0)}}
+						</div>
 					</div>
 				</div>
+                
+                <!-- Probability Graph -->
+                <div class="space-y-2 mt-2">
+                    {{range $opt, $prob := $val.Probabilities}}
+                    <div class="flex items-center text-[10px] font-mono">
+                        <div class="w-24 text-slate-400 truncate pr-2" title="{{$opt}}">{{$opt}}</div>
+                        <div class="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden flex relative">
+                            <div class="h-full bg-indigo-500 rounded-full transition-all duration-1000" style="width: {{printf "%.0f" (mul $prob 100.0)}}%"></div>
+                        </div>
+                        <div class="w-10 text-right text-slate-500 ml-2">{{printf "%.1f%%" (mul $prob 100.0)}}</div>
+                    </div>
+                    {{end}}
+                </div>
 			</div>
 			{{end}}
 		</div>
@@ -318,7 +342,7 @@ var resultTpl = template.Must(template.New("result").Parse(`
 				Latency: {{.Latency}}ms
 			</div>
 			<div class="flex items-center gap-4">
-				<span>Inputs: ~{{.EstTokens}} tokens</span>
+				<span>Inputs: {{.EstTokens}} tokens</span>
 				<span class="text-indigo-400 font-semibold bg-indigo-500/10 px-2 py-1 rounded">Cost: ${{printf "%.6f" .EstCost}}</span>
 			</div>
 		</div>
@@ -331,29 +355,22 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-func main() {
-	godotenv.Load() // Loads .env if it exists, ignores otherwise
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(indexHTML))
-	})
-
-	http.HandleFunc("/simulate", handleSimulate)
-
-	fmt.Println("Server running on http://localhost:8080")
-	http.ListenAndServe(":8080", nil)
-}
-
-type Decision struct {
-	Value      string
-	Confidence float64
+type DecisionUI struct {
+	Type          string
+	Value         string
+	Confidence    float64
+	Probabilities map[string]float64
 }
 
 var (
 	rateLimiterMu sync.Mutex
-	rateLimiter   = make(map[string]time.Time)
+	rateLimiter   = make(map[string]*rateLimitState)
 )
+
+type rateLimitState struct {
+	count int
+	reset time.Time
+}
 
 func handleSimulate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -361,27 +378,31 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Security: Max Body Size (10 KB max) to prevent large payload attacks / token burning
+	// 1. Max Body Size (10 KB max)
 	r.Body = http.MaxBytesReader(w, r.Body, 10240)
 	if err := r.ParseForm(); err != nil {
 		renderError(w, "Payload too large or malformed.")
 		return
 	}
 
-	// 2. Security: IP-based Rate Limiting (1 request per 3 seconds per IP)
+	// 2. IP-based Rate Limiting (10 requests per 10 seconds per IP)
 	ip := strings.Split(r.RemoteAddr, ":")[0]
 	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
 		ip = strings.Split(forwarded, ",")[0]
 	}
 
 	rateLimiterMu.Lock()
-	lastReq, exists := rateLimiter[ip]
-	if exists && time.Since(lastReq) < 3*time.Second {
-		rateLimiterMu.Unlock()
-		renderError(w, "Security Check: Rate limit exceeded. Please wait 3 seconds before trying again to prevent API abuse.")
-		return
+	state, exists := rateLimiter[ip]
+	if !exists || time.Now().After(state.reset) {
+		rateLimiter[ip] = &rateLimitState{count: 1, reset: time.Now().Add(10 * time.Second)}
+	} else {
+		if state.count >= 10 {
+			rateLimiterMu.Unlock()
+			renderError(w, "Security Check: Rate limit exceeded. Please wait a few seconds before trying again.")
+			return
+		}
+		state.count++
 	}
-	rateLimiter[ip] = time.Now()
 	rateLimiterMu.Unlock()
 
 	apiKey := os.Getenv("TYPESAFE_API_KEY")
@@ -427,62 +448,77 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 		questions = map[string]interface{}{
 			"routing_action": map[string]interface{}{
 				"type": "choice",
-				"instructions": "Decide the routing action.",
+				"instructions": "Determine the ideal routing action for this transaction. Look at the distance from billing IP, the account age, and the transaction amount compared to the historical average. If there are massive discrepancies (e.g., VPN usage with a huge amount on a brand new device), route to MANUAL_REVIEW or DECLINE.",
 				"criteria": map[string]string{
-					"APPROVE": "Low risk, normal behavior.",
-					"STEP_UP_3DS": "Medium risk, out of pattern.",
-					"DECLINE": "Obvious fraud.",
+					"APPROVE": "Normal transaction, completely typical behavior.",
+					"STEP_UP_3DS": "Slight anomaly, prompt for SMS 2FA to verify.",
+					"MANUAL_REVIEW": "High-value suspicious transaction, needs human eyes.",
+					"DECLINE": "Obvious fraud, strict anomalies across multiple vectors.",
 				},
 			},
-			"risk_severity": map[string]interface{}{
-				"type": "score", "instructions": "Rate fraud risk.",
-				"criteria": []string{"1 (Safe)", "2 (Low)", "3 (Med)", "4 (High)", "5 (Critical)"},
+			"fraud_vector": map[string]interface{}{
+				"type": "choice",
+				"instructions": "Identify the primary fraud vector present in this transaction. Is it Account Takeover (ATO) where an old account is hijacked via VPN? Is it Carding where bots test small amounts rapidly? Or is it safe?",
+				"criteria": map[string]string{
+					"account_takeover": "Old account suddenly using a VPN, new device, and vastly different IP.",
+					"carding": "High velocity of very small transactions ($1-2).",
+					"none": "No distinct fraud vectors observed.",
+				},
 			},
-			"is_ato_risk": map[string]interface{}{
-				"type": "noul", "instructions": "Is this an account takeover?",
+			"is_anomaly": map[string]interface{}{
+				"type": "noul",
+				"instructions": "Simply put, does this transaction look weird or anomalous compared to baseline expectations? Return true if anything is off.",
 			},
 		}
 
 	} else if usecase == "support" {
-		// 3. Security: Input Truncation to save tokens
 		stateStr = r.FormValue("state")
 		if len(stateStr) > 1000 {
 			stateStr = stateStr[:1000]
 		}
 		questions = map[string]interface{}{
 			"department": map[string]interface{}{
-				"type": "choice", "instructions": "Which department?",
+				"type": "choice",
+				"instructions": "Read the customer's message and determine the most appropriate internal department to handle it. Look for keywords related to money/payments, bugs/downtime, or feature upgrades.",
 				"criteria": map[string]string{
-					"billing": "Payments, invoices",
-					"technical": "Bugs, outages",
-					"sales": "Upgrades, pricing",
+					"billing": "Issues with payments, invoices, refunds, or subscriptions.",
+					"technical": "System errors, 500 codes, bugs, or outages.",
+					"sales": "Questions about upgrading, enterprise pricing, or new features.",
 				},
 			},
 			"urgency": map[string]interface{}{
-				"type": "score", "instructions": "How urgent?",
-				"criteria": []string{"Low", "Medium", "High", "Critical (System down)"},
+				"type": "choice",
+				"instructions": "Determine the urgency of the ticket. If the customer mentions 'unacceptable', 'down', 'critical', or multiple days of failure, route as Critical.",
+				"criteria": map[string]string{
+					"low": "General inquiry, no rush.",
+					"medium": "Standard support request.",
+					"high": "Customer is blocked but workarounds exist.",
+					"critical": "System is completely down, data loss, or extreme anger.",
+				},
 			},
-			"is_frustrated": map[string]interface{}{
-				"type": "noul", "instructions": "Is the user angry or frustrated?",
+			"escalate_to_manager": map[string]interface{}{
+				"type": "noul",
+				"instructions": "Should this ticket be automatically escalated to a Customer Success Manager? Yes if the user is extremely angry, threatening to churn, or experiencing severe disruption.",
 			},
 		}
 	} else if usecase == "moderation" {
-		// 3. Security: Input Truncation to save tokens
 		stateStr = r.FormValue("state")
 		if len(stateStr) > 1000 {
 			stateStr = stateStr[:1000]
 		}
 		questions = map[string]interface{}{
-			"violation_type": map[string]interface{}{
-				"type": "choice", "instructions": "What violation occurred?",
+			"violation_severity": map[string]interface{}{
+				"type": "choice",
+				"instructions": "Determine how severe this content violation is. Is it a minor infraction, or does it require an immediate ban?",
 				"criteria": map[string]string{
-					"none": "No violation",
-					"harassment": "Attacking an individual",
-					"hate_speech": "Slurs/discrimination",
+					"safe": "No violations, normal conversation.",
+					"warning": "Mild toxicity, profanity, or passive-aggressiveness.",
+					"ban": "Hate speech, direct threats, doxxing, or severe abuse.",
 				},
 			},
-			"is_toxic": map[string]interface{}{
-				"type": "noul", "instructions": "Is this comment highly toxic or abusive?",
+			"is_spam": map[string]interface{}{
+				"type": "noul",
+				"instructions": "Is this comment attempting to advertise, solicit, or redirect users maliciously (spam)?",
 			},
 		}
 	}
@@ -494,10 +530,6 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 	}
 	reqJSON, _ := json.Marshal(reqBody)
 	
-	// Token & Cost Estimation
-	estTokens := (len(stateStr) + len(reqJSON)) / 4
-	estCost := float64(estTokens) * (0.042 / 1000000.0)
-
 	start := time.Now()
 	httpReq, _ := http.NewRequest("POST", "https://api.typesafe.ai/v1/systemone", bytes.NewBuffer(reqJSON))
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
@@ -525,10 +557,40 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decisions := make(map[string]Decision)
-	for k, v := range jevResp.Choices { decisions[k] = Decision{v.Choice, v.Confidence} }
-	for k, v := range jevResp.Scores { decisions[k] = Decision{v.Score, v.Confidence} }
-	for k, v := range jevResp.Nouls { decisions[k] = Decision{fmt.Sprintf("%t", v.Noul), v.Confidence} }
+	decisions := make(map[string]DecisionUI)
+	for k, ans := range jevResp.Answers {
+		d := DecisionUI{
+			Type:          ans.Type,
+			Probabilities: make(map[string]float64),
+		}
+
+		if ans.Type == "choice" {
+			d.Value = ans.Choice
+			d.Confidence = ans.Confidence
+			for pk, pv := range ans.Probabilities {
+				d.Probabilities[pk] = pv
+			}
+		} else if ans.Type == "score" {
+			if ans.Score != nil {
+				d.Value = fmt.Sprintf("%.2f / 1.00", *ans.Score)
+			}
+			d.Confidence = ans.Confidence
+			for pk, pv := range ans.Probabilities {
+				d.Probabilities[pk] = pv
+			}
+		} else if ans.Type == "noul" {
+			if ans.Noul != nil {
+				d.Value = fmt.Sprintf("%.0f%% Yes", *ans.Noul * 100)
+				d.Confidence = *ans.Noul 
+				d.Probabilities["Yes"] = *ans.Noul
+				d.Probabilities["No"] = 1.0 - *ans.Noul
+			}
+		}
+		decisions[k] = d
+	}
+
+	estTokens := jevResp.Usage.InputTokens
+	estCost := float64(estTokens) * (0.042 / 1000000.0)
 
 	qBytes, _ := json.MarshalIndent(questions, "", "  ")
 
@@ -536,7 +598,7 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 		Error        string
 		StateStr     string
 		QuestionsStr string
-		Decisions    map[string]Decision
+		Decisions    map[string]DecisionUI
 		EstTokens    int
 		EstCost      float64
 		Latency      int64
@@ -554,4 +616,18 @@ func handleSimulate(w http.ResponseWriter, r *http.Request) {
 
 func renderError(w http.ResponseWriter, errMsg string) {
 	resultTpl.Execute(w, map[string]interface{}{"Error": errMsg})
+}
+
+func main() {
+	godotenv.Load() // Loads .env if it exists, ignores otherwise
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(indexHTML))
+	})
+
+	http.HandleFunc("/simulate", handleSimulate)
+
+	fmt.Println("Server running on http://localhost:8080")
+	http.ListenAndServe(":8080", nil)
 }
